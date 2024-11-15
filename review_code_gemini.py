@@ -132,51 +132,59 @@ def analyze_code(parsed_diff: List[Dict[str, Any]], pr_details: PRDetails) -> Li
 
 
 def create_prompt(file: PatchedFile, hunk: Hunk, pr_details: PRDetails) -> str:
-    """Creates the prompt for the Gemini model."""
-    return f"""Your task is reviewing pull requests. Instructions:
-    - Provide the response in following JSON format:  {{"reviews": [{{"lineNumber":  <line_number>, "reviewComment": "<review comment>"}}]}}
-    - Provide comments and suggestions ONLY if there is something to improve, otherwise "reviews" should be an empty array.
-    - Use GitHub Markdown in comments
-    - Focus on bugs, security issues, and performance problems
-    - IMPORTANT: NEVER suggest adding comments to the code
+    """Tạo prompt cho model Gemini bằng tiếng Việt."""
+    return f"""Bạn là người đang review pull request. Hãy làm theo hướng dẫn sau:
+    - Trả lời theo định dạng JSON:  {{"reviews": [{{"lineNumber":  <số_dòng>, "reviewComment": "<nhận xét review>"}}]}}
+    - Chỉ đưa ra nhận xét và đề xuất khi có điểm cần cải thiện, nếu không thì "reviews" sẽ là mảng rỗng.
+    - Sử dụng Markdown của GitHub trong các nhận xét
+    - Tập trung vào các vấn đề:
+        + Lỗi (bugs)
+        + Bảo mật
+        + Hiệu năng
+    - QUAN TRỌNG: KHÔNG đề xuất thêm comments vào code
 
-Review the following code diff in the file "{file.path}" and take the pull request title and description into account when writing the response.
+Hãy review đoạn code diff sau trong file "{file.path}" và xem xét tiêu đề cùng mô tả của pull request khi viết phản hồi.
   
-Pull request title: {pr_details.title}
-Pull request description:
+Tiêu đề pull request: {pr_details.title}
+Mô tả pull request:
 
 ---
-{pr_details.description or 'No description provided'}
+{pr_details.description or 'Không có mô tả'}
 ---
 
-Git diff to review:
+Git diff cần review:
 
 ```diff
 {hunk.content}
 ```
+
+Lưu ý: Hãy viết nhận xét bằng tiếng Việt, đảm bảo rõ ràng và chuyên nghiệp.
 """
 
 def get_ai_response(prompt: str) -> List[Dict[str, str]]:
-    """Sends the prompt to Gemini API and retrieves the response."""
-    # Use 'gemini-1.5-flash-002' as a fallback default value if the environment variable isn't set
+    """Gửi prompt đến Gemini API và xử lý phản hồi."""
     gemini_model = Client.GenerativeModel(os.environ.get('GEMINI_MODEL', 'gemini-1.5-flash-002'))
-    print("===== The promt sent to Gemini is: =====")
+    print("===== Prompt gửi đến Gemini là: =====")
     print(prompt)
     try:
-        response = gemini_model.generate_content(prompt)
+        # Thêm hướng dẫn ngôn ngữ vào system prompt
+        response = gemini_model.generate_content([
+            {"role": "system", "content": "Hãy trả lời bằng tiếng Việt. Giữ nguyên format JSON nhưng nội dung reviewComment sẽ bằng tiếng Việt."},
+            {"role": "user", "content": prompt}
+        ])
 
         response_text = response.text.strip()
         if response_text.startswith('```json'):
-            response_text = response_text[7:]  # Remove ```json
+            response_text = response_text[7:]
         if response_text.endswith('```'):
-            response_text = response_text[:-3]  # Remove ```
+            response_text = response_text[:-3]
         response_text = response_text.strip()
         
-        print(f"Cleaned response text: {response_text}")
+        print(f"Phản hồi đã được làm sạch: {response_text}")
         
         try:
             data = json.loads(response_text)
-            print(f"Parsed JSON data: {data}")
+            print(f"Dữ liệu JSON đã parse: {data}")
             
             if "reviews" in data and isinstance(data["reviews"], list):
                 reviews = data["reviews"]
@@ -185,20 +193,19 @@ def get_ai_response(prompt: str) -> List[Dict[str, str]]:
                     if "lineNumber" in review and "reviewComment" in review:
                         valid_reviews.append(review)
                     else:
-                        print(f"Invalid review format: {review}")
+                        print(f"Format review không hợp lệ: {review}")
                 return valid_reviews
             else:
-                print("Error: Response doesn't contain valid 'reviews' array")
-                print(f"Response content: {data}")
+                print("Lỗi: Phản hồi không chứa mảng 'reviews' hợp lệ")
+                print(f"Nội dung phản hồi: {data}")
                 return []
         except json.JSONDecodeError as e:
-            print(f"Error decoding JSON response: {e}")
-            print(f"Raw response: {response_text}")
+            print(f"Lỗi khi decode JSON: {e}")
+            print(f"Phản hồi thô: {response_text}")
             return []
     except Exception as e:
-        print(f"Error during Gemini API call: {e}")
+        print(f"Lỗi khi gọi API Gemini: {e}")
         return []
-
 class FileInfo:
     """Simple class to hold file information."""
     def __init__(self, path: str):
@@ -239,25 +246,24 @@ def create_review_comment(
     pull_number: int,
     comments: List[Dict[str, Any]],
 ):
-    """Submits the review comments to the GitHub API."""
-    print(f"Attempting to create {len(comments)} review comments")
-    print(f"Comments content: {json.dumps(comments, indent=2)}")
+    """Gửi các nhận xét review lên GitHub API."""
+    print(f"Đang thử tạo {len(comments)} nhận xét review")
+    print(f"Nội dung nhận xét: {json.dumps(comments, indent=2)}")
 
     repo = gh.get_repo(f"{owner}/{repo}")
     pr = repo.get_pull(pull_number)
     try:
-        # Create the review with only the required fields
         review = pr.create_review(
-            body="Gemini AI Code Reviewer Comments",
+            body="Nhận xét từ Gemini AI Code Reviewer",
             comments=comments,
             event="COMMENT"
         )
-        print(f"Review created successfully with ID: {review.id}")
+        print(f"Đã tạo review thành công với ID: {review.id}")
         
     except Exception as e:
-        print(f"Error creating review: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(f"Review payload: {comments}")
+        print(f"Lỗi khi tạo review: {str(e)}")
+        print(f"Loại lỗi: {type(e)}")
+        print(f"Payload review: {comments}")
 
 def parse_diff(diff_str: str) -> List[Dict[str, Any]]:
     """Parses the diff string and returns a structured format."""
